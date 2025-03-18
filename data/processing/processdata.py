@@ -1,6 +1,6 @@
 import subprocess
 from pathlib import Path
-import tqdm
+from tqdm import tqdm
 
 def loaddata(fpath, t, dataname, datatype):
     # This function runs the Matlab file loaddata.m (on the same variables) in commandline
