@@ -1,5 +1,6 @@
 import subprocess
 from pathlib import Path
+import tqdm
 
 def loaddata(fpath, t, dataname, datatype):
     # This function runs the Matlab file loaddata.m (on the same variables) in commandline
@@ -10,8 +11,6 @@ def loaddata(fpath, t, dataname, datatype):
     
     # The output file should match the file the Matlab code is reading
     output = output_dir / Path(f"{t - 1:06d}.mat")
-
-    print(f"Processing {fpath}/{t - 1:06d}.bin")
     
     cmd = f"matlab -batch \"data = loaddata('{fpath}', {t}, '{dataname}', '{datatype}'); save('{str(output)}', 'data')\""
     subprocess.run(cmd, shell=True, check=True)
@@ -26,5 +25,8 @@ if __name__ == '__main__':
     for subdir in subdirs:
         nfiles = len([file for file in Path(f"{str(subdir)}/analysis/{dataname}").iterdir() if file.is_file() and file.suffix == ".bin"])
 
+        progress_bar = tqdm(total=nfiles, desc=f"Processing subdirectory {str(subdir)}", leave=True)        # I felt fancy today
+
         for t in range(1, nfiles + 1):
             loaddata(str(subdir), t, dataname, datatype)
+            progress_bar.update(1)
