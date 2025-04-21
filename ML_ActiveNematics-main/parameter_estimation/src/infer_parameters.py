@@ -46,6 +46,10 @@ if __name__ == '__main__':
     model.load_state_dict(info['state_dict'])           # Put the weights into the model object
     model.to(device)
 
+    # Set up the output directory (we want to categorize it by the training model just so we know what gave what numbers)
+    output_dir = Path(args.output_directory) / Path(args.model_name).name
+    output_dir.mkdir(parents=True, exist_ok=True)         # Create output_dir if it doesn't exist already
+
     # Then we loop over every HDF5 file in our input directory
     for path in paths:
         logger.info(f'Processing data file: {path}')
@@ -82,10 +86,6 @@ if __name__ == '__main__':
 
         # Write the parameter estimates as a DataFrame object, then save as a CSV 
         df_infer = pd.DataFrame(inferences, columns=['k', 'z'])
-
-        output_dir = Path(args.output_directory) / 'Inferences'
-        output_dir.mkdir(parents=True, exist_ok=True)         # Create output_dir if it doesn't exist already
         output_file = f'{output_dir / Path(path).stem}.csv'
-
         logger.info(f'Saving inferences to {output_file}')
         df_infer.to_csv(output_file)
