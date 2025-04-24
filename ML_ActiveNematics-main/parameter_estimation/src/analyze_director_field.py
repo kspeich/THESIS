@@ -38,9 +38,13 @@ class DirectorField:
         # size is the size of coarse graining (i.e., how many neighbors we average over)
 
         logger.debug('Computing S')
-        rawS = (3 * np.cos(self.theta) ** 2 - 1) / 2
         filtersize = 2 * size + 1
-        return uniform_filter(rawS, size=filtersize)        # The uniform_filter() function does the coarse graining for us!
+
+        # The uniform_filter() function does the coarse graining for us!  We use it on both theta and S
+        coarse_grained_theta = uniform_filter(self.theta, size=filtersize)
+        rawS = (3 * np.cos(self.theta - coarse_grained_theta) ** 2 - 1) / 2
+
+        return uniform_filter(rawS, size=filtersize)        
 
     def charge(self, t, x, y, r):
         # Given a defect candidate at the point (x, y) at time t, this will compute the topological charge of this candidate
@@ -103,10 +107,12 @@ class DirectorField:
         defects_x, defects_y = zip(*defects)
 
         fig, (ax_D, ax_S) = plt.subplots(1, 2, figsize=(15, 6))
-        ax_D.scatter(defects_x, defects_y)                          # Scatter plot of defects
-        sns.heatmap(self.S[t], ax=ax_S, cmap='plasma_r')            # Heatmap of S
+        ax_D.scatter(defects_x, defects_y, s=2)                                         # Scatter plot of defects
+        sns.heatmap(np.transpose(self.S[t]), ax=ax_S, cmap='RdYlBu', center=cutoff)     # Heatmap of S
 
-        fig.suptitle(f'Topological defects and scalar order parameter at time {t} from {self.name}')
+        ax_S.invert_yaxis()                                         # So that 0 shows up on the bottom and not the top
+
+        fig.suptitle(f'Topological defects and scalar order parameter at time {t} from {self.name}', fontsize=18)
 
         return fig, (ax_D, ax_S)
 
