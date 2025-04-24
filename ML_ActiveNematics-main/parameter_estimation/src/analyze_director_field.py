@@ -1,10 +1,16 @@
 import matplotlib.pyplot as plt
 import numpy as np
 from scipy.optimize import curve_fit
+from scipy.ndimage import uniform_filter
 import pandas as pd
 import h5py
 from pathlib import Path
 import argparse
+import logging
+
+logging.basicConfig(level=logging.DEBUG)
+logger = logging.getLogger(__name__)
+logger.setLevel(logging.DEBUG)
 
 # We'll need to do things like calculate the scalar order parameter $S$ at every point and time.
 # So it would probably be more efficient to just write a class that will do all these things.
@@ -18,36 +24,22 @@ class DirectorField:
             self.length = self.n.shape[2]
             self.width = self.n.shape[3]
 
-    def neighbors(self, x, y, size):          
-        # If size = 1, we will return a 3x3 grid around the point (x, y).  If size = 2, the grid will be 5x5 and so on.
-        # This includes the point (x, y) (because it's easier)
-
-        # neighbor_candidates is all lattice points in the (2 * self.size + 1) x (2 * self.size + 1) grid around the point (x, y).
-        neighbor_candidates = [(x + i, y + j) for i in range(-1 * size, size + 1) for j in range(-1 * size, size + 1)]
-
-        # Of course, these lattice points must actually be in our lattice grid.
-        # So we only keep the ones with x-value between 0 and self.length and y-value between 0 and self.width.
-        return [(a, b) for (a, b) in neighbor_candidates if 0 <= a < self.length and 0 <= b < self.width]
-
     def S(self, size):
         # This function wil return the scalar order parameter FIELD as an array
         # size is the size of coarse graining (i.e., how many neighbors we average over)
 
-        S = np.zeros((self.timepoints, self.length, self.width))                # Initialize as all zeroes but with the right dimensions
+        logger.debug('Computing S')
 
-        for t in range(self.timepoints):
-            for x in range(self.length):
-                for y in range(self.width):
-                    sumS = 0
-                    neighbors = self.neighbors(x, y, size)
-                    for (a, b) in neighbors:
-                        theta = np.arctan2(self.n[t][1][a][b], self.n[t][0][a][b])
-                        sumS += (3 * np.cos(theta) * np.cos(theta) - 1) / 2
-                    S[t][x][y] = sumS / len(neighbors)
-        
-        return S
+        theta = np.arctan2(self.n[:, 1, :, :], self.n[:, 0, :, :])
+        rawS = (3 * np.cos(theta) ** 2 - 1) / 2
+
+        filtersize = 2 * size + 1
+
+        return uniform_filter(rawS, size=filtersize)        # The uniform_filter() function does the coarse graining for us!
 
     def charge(self, t, x, y, r):
+        # Given a defect candidate at the point (x, y) at time t, this will compute the topological charge of this candidate
+
         # We will take a square contour loop with corners at (x + r, y + r), (x - r, y + r), (x - r, y - r), and (x + r, y - r)
         contour = []
 
@@ -72,7 +64,7 @@ class DirectorField:
         # Then, we compute the director field and associated angle ALONG THE CONTOUR
         n = [(self.n[t][0][a][b], self.n[t][1][a][b]) for (a, b) in contour]
         angles = [np.arctan2(ny, nx) for (nx, ny) in n]
-        differences = np.unwrap([angles[i + 1] - angles[i] for i in range(len(angles))])
+        differences = np.unwrap([angles[i + 1] - angles[i] for i in range(len(angles) - 1)])
 
         # We compute the (raw) topological charge by approximating the integral as a sum of these differences
         q = np.sum(differences) / (2 * np.pi)
@@ -80,8 +72,9 @@ class DirectorField:
         # Then, we round to the nearest half integer:
         return round(2 * q) / 2
 
-
     def find_defects(self, cutoff, size, r):
+        logger.debug(f'Finding defects')
+
         defects = {}        # We'll initialize this as an empty dictionary.  The keys will be the times.
 
         S = self.S(size)    # Let's just load the scalar order parameter into memory
@@ -112,6 +105,8 @@ class DirectorField:
         return fig, (ax1, ax2)
     
     def correlation_length(self, nPairs):
+        logger.debug('Computing correlation length')
+
         # We first begin by defining the correlation function -- or rather, the part that is supposed to be averaged
         def to_be_averaged(t, x1, y1, x2, y2):
             theta1 = np.arctan2(self.n[t][1][x1][y1], self.n[t][0][x1][y1])
@@ -149,7 +144,7 @@ class DirectorField:
         popt, pcov = curve_fit(f, r_data, C_data)       # popt = (A, B, l) for the best fit.  We really only care about l.
 
         return popt[2]
-    
+
 
 if __name__ == '__main__':
     parser = argparse.ArgumentParser()
@@ -167,8 +162,10 @@ if __name__ == '__main__':
     files = [file for file in Path(args.directory).iterdir() if file.is_file() and file.suffix == ".hdf5" and not file.name.startswith("._")]
 
     for file in files:
-        print(f'Analyzing file {file.name}')
+        logger.info(f'Analyzing file {file.name}')
         director = DirectorField(file)
+
         director.plot_defect_density(args.cutoff, args.size, args.r)[0].savefig(f'{args.outputdir}/DefectDensity{director.name}.png')
-        print(f'Plots saved to {args.outputdir}/DefectDensity{director.name}.png')
-        print(f'Nematic Correlation Length: {director.correlation_length(args.nPairs)}')
+        logger.info(f'Plots saved to {args.outputdir}/DefectDensity{director.name}.png')
+
+        logger.info(f'Nematic Correlation Length: {director.correlation_length(args.nPairs)}')
