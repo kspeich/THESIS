@@ -9,9 +9,9 @@ from pathlib import Path
 import argparse
 import logging
 
-logging.basicConfig(level=logging.DEBUG)
+logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
-logger.setLevel(logging.DEBUG)
+logger.setLevel(logging.INFO)
 
 # We'll need to do things like calculate the scalar order parameter $S$ at every point and time.
 # So it would probably be more efficient to just write a class that will do all these things.
@@ -180,7 +180,7 @@ class DirectorField:
 if __name__ == '__main__':
     parser = argparse.ArgumentParser()
     parser.add_argument('--directory', type=str, default='../../../data/processeddata')     # Directory of the datasets
-    parser.add_argument('--outputdir', type=str, default='../../../data/directorplots')     # Output directory of plots
+    parser.add_argument('--outputdir', type=str, default='../../../data/analysis')          # Output directory of results
     parser.add_argument('--cutoff', type=float, default=0.7)                                # The cutoff in the scalar order parameter S to identify defect candidates
     parser.add_argument('--size', type=int, default=3)                                      # Size ("radius") of coarse graining, in pixels
     parser.add_argument('--r', type=int, default=2)                                         # "Radius" of contour for topological defects
@@ -192,6 +192,8 @@ if __name__ == '__main__':
 
     files = [file for file in Path(args.directory).iterdir() if file.is_file() and file.suffix == ".hdf5" and not file.name.startswith("._")]
 
+    corr_lengths = []
+
     for file in files:
         logger.info(f'Analyzing file {file.name}')
         director = DirectorField(file, args.size)
@@ -202,4 +204,8 @@ if __name__ == '__main__':
         director.plot_defect_density(args.cutoff, args.r)[0].savefig(f'{args.outputdir}/DefectDensity{director.name}.png')
         logger.info(f'Plots saved to {args.outputdir}/DefectDensity{director.name}.png')
 
-        logger.info(f'Nematic Correlation Length: {director.correlation_length(args.nPairs)}')
+        corr_lengths.append(director.correlation_length(args.nPairs))
+
+    # Save the correlation lengths as a CSV file so we can access later
+    df = pd.DataFrame({'filename': files, 'l_n': corr_lengths})
+    df.to_csv(f'{args.outputdir}/CorrelationLengths.csv')
