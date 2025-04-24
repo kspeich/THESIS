@@ -3,6 +3,7 @@ import numpy as np
 from scipy.optimize import curve_fit
 from scipy.ndimage import uniform_filter
 import pandas as pd
+import seaborn as sns
 import h5py
 from pathlib import Path
 import argparse
@@ -16,7 +17,7 @@ logger.setLevel(logging.DEBUG)
 # So it would probably be more efficient to just write a class that will do all these things.
 
 class DirectorField:
-    def __init__(self, filename):
+    def __init__(self, filename, size):
         self.name = Path(filename).stem
         with h5py.File(filename, 'r') as f:
             self.n = f['director'][:]
@@ -24,17 +25,21 @@ class DirectorField:
             self.length = self.n.shape[2]
             self.width = self.n.shape[3]
 
+            # Now we will pre-load the theta and S arrays.  These are big computations but it's more efficient up here than doing it in each function.
+            self.theta = self.theta()
+            self.S = self.S(size)
+
+    def theta(self):
+        logger.debug('Computing theta')
+        return np.arctan2(self.n[:, 1, :, :], self.n[:, 0, :, :])
+
     def S(self, size):
         # This function wil return the scalar order parameter FIELD as an array
         # size is the size of coarse graining (i.e., how many neighbors we average over)
 
         logger.debug('Computing S')
-
-        theta = np.arctan2(self.n[:, 1, :, :], self.n[:, 0, :, :])
-        rawS = (3 * np.cos(theta) ** 2 - 1) / 2
-
+        rawS = (3 * np.cos(self.theta) ** 2 - 1) / 2
         filtersize = 2 * size + 1
-
         return uniform_filter(rawS, size=filtersize)        # The uniform_filter() function does the coarse graining for us!
 
     def charge(self, t, x, y, r):
@@ -62,8 +67,7 @@ class DirectorField:
         contour.append(((x + r, y + r)))        # Add the initial point at the end for convenience
 
         # Then, we compute the director field and associated angle ALONG THE CONTOUR
-        n = [(self.n[t][0][a][b], self.n[t][1][a][b]) for (a, b) in contour]
-        angles = [np.arctan2(ny, nx) for (nx, ny) in n]
+        angles = [self.theta[t, a, b] for (a, b) in contour]
         differences = np.unwrap([angles[i + 1] - angles[i] for i in range(len(angles) - 1)])
 
         # We compute the (raw) topological charge by approximating the integral as a sum of these differences
@@ -72,21 +76,42 @@ class DirectorField:
         # Then, we round to the nearest half integer:
         return round(2 * q) / 2
 
-    def find_defects(self, cutoff, size, r):
-        logger.debug(f'Finding defects')
+    def find_defects(self, t, cutoff, r):
+        logger.debug(f'Finding defects at time {t}')
 
+        x_cand, y_cand = np.where(self.S[t] < cutoff)           # Filter out all the points where S < cutoff
+        # Keep the ones in range to make a contour around it, and keep the ones with nonzero topological charge
+        return [(x, y) for (x, y) in zip(x_cand, y_cand) if r <= x < self.length - r and r <= y < self.width - r and self.charge(t, x, y, r) != 0]
+
+    def find_all_defects(self, cutoff, r):
         defects = {}        # We'll initialize this as an empty dictionary.  The keys will be the times.
 
-        S = self.S(size)    # Let's just load the scalar order parameter into memory
-
         for t in range(self.timepoints):
-            defects[t] = [(x, y) for x in range(r, self.length - r) for y in range(r, self.width - r) if S[t][x][y] < cutoff and self.charge(t, x, y, r) != 0]
-            # We use these ranges for x and y in order to avoid contours that go out of our lattice
-
+            defects[t] = self.find_defects(t, cutoff, r)
+            
         return defects
+    
+    def plot_defects(self, t, cutoff, r):
+        # This function is more of a sanity check than anything.  We plot the locations of the defects against a heatmap of S.
+        
+        defects = self.find_defects(t, cutoff, r)
 
-    def plot_defect_density(self, cutoff, size, r):
-        defects = self.find_defects(cutoff, size, r)
+        if not defects:
+            logger.warning(f'No defects found at time {t}')
+            return None, (None, None)
+
+        defects_x, defects_y = zip(*defects)
+
+        fig, (ax_D, ax_S) = plt.subplots(1, 2, figsize=(15, 6))
+        ax_D.scatter(defects_x, defects_y)                          # Scatter plot of defects
+        sns.heatmap(self.S[t], ax=ax_S, cmap='plasma_r')            # Heatmap of S
+
+        fig.suptitle(f'Topological defects and scalar order parameter at time {t} from {self.name}')
+
+        return fig, (ax_D, ax_S)
+
+    def plot_defect_density(self, cutoff, r):
+        defects = self.find_all_defects(cutoff, r)
         num_defects = [len(defects[t]) for t in range(self.timepoints)]                                             # Total number of defects at each time
         charges = [sum([self.charge(t, x, y, r) for (x, y) in defects[t]]) for t in range(self.timepoints)]         # Total charge from the defects at each time
 
@@ -109,8 +134,8 @@ class DirectorField:
 
         # We first begin by defining the correlation function -- or rather, the part that is supposed to be averaged
         def to_be_averaged(t, x1, y1, x2, y2):
-            theta1 = np.arctan2(self.n[t][1][x1][y1], self.n[t][0][x1][y1])
-            theta2 = np.arctan2(self.n[t][1][x2][y2], self.n[t][0][x2][y2])
+            theta1 = np.arctan2(self.n[t, 1, x1, y1], self.n[t, 0, x1, y1])
+            theta2 = np.arctan2(self.n[t, 1, x2, y2], self.n[t, 0, x2, y2])
             return np.cos(2 * (theta1 - theta2))
 
         sorted_by_distance = {}     # This is a preliminary dictionary we will use to keep account of the outputs of the to_be_averaged() based on the distance between the two points
@@ -151,7 +176,7 @@ if __name__ == '__main__':
     parser.add_argument('--directory', type=str, default='../../../data/processeddata')     # Directory of the datasets
     parser.add_argument('--outputdir', type=str, default='../../../data/directorplots')     # Output directory of plots
     parser.add_argument('--cutoff', type=float, default=0.7)                                # The cutoff in the scalar order parameter S to identify defect candidates
-    parser.add_argument('--size', type=int, default=2)                                      # Size ("radius") of coarse graining, in pixels
+    parser.add_argument('--size', type=int, default=3)                                      # Size ("radius") of coarse graining, in pixels
     parser.add_argument('--r', type=int, default=2)                                         # "Radius" of contour for topological defects
     parser.add_argument('--nPairs', type=int, default=10000)                                # Number of pairs per timestep to sample when finding correlation length
 
@@ -163,9 +188,12 @@ if __name__ == '__main__':
 
     for file in files:
         logger.info(f'Analyzing file {file.name}')
-        director = DirectorField(file)
+        director = DirectorField(file, args.size)
 
-        director.plot_defect_density(args.cutoff, args.size, args.r)[0].savefig(f'{args.outputdir}/DefectDensity{director.name}.png')
+        director.plot_defects(0, args.cutoff, args.r)[0].savefig(f'{args.outputdir}/Defects{director.name}.png')
+        logger.info(f'Plots saved to {args.outputdir}/Defects{director.name}.png')
+
+        director.plot_defect_density(args.cutoff, args.r)[0].savefig(f'{args.outputdir}/DefectDensity{director.name}.png')
         logger.info(f'Plots saved to {args.outputdir}/DefectDensity{director.name}.png')
 
         logger.info(f'Nematic Correlation Length: {director.correlation_length(args.nPairs)}')
